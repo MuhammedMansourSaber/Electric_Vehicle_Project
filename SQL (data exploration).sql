@@ -1,6 +1,4 @@
--- =====================================================
--- 1. DATA EXPLORATION
--- =====================================================
+-- explore data
 
 SELECT *
 FROM electric_vehicle_population_data
@@ -10,16 +8,13 @@ SELECT COUNT(*) AS total_vehicles
 FROM electric_vehicle_population_data;
 
 
--- =====================================================
--- 2. DATA CLEANING (CREATE CLEAN VIEW)
--- =====================================================
+-- cleaned view
 
 CREATE OR REPLACE VIEW ev_clean AS
 SELECT
     UPPER(TRIM(`Make`)) AS make,
     UPPER(TRIM(`Model`)) AS model,
     `Model Year`,
-
     TRIM(`Electric Vehicle Type`) AS ev_type,
 
     CASE 
@@ -31,7 +26,6 @@ SELECT
     TRIM(`City`) AS city,
     TRIM(`State`) AS state,
     `Postal Code`,
-
     TRIM(`Clean Alternative Fuel Vehicle (CAFV) Eligibility`) AS cafv_eligibility
 
 FROM electric_vehicle_population_data
@@ -39,19 +33,17 @@ WHERE `Make` IS NOT NULL
   AND `Model` IS NOT NULL;
 
 
--- =====================================================
--- 3. BASIC ANALYSIS
--- =====================================================
+-- ev type distribution
 
--- EV Type Distribution
 SELECT 
     ev_type,
-    COUNT(*) AS vehicle_count
+    COUNT(*) AS total
 FROM ev_clean
 GROUP BY ev_type;
 
 
--- EV Growth Over Time
+-- yearly trend
+
 SELECT 
     `Model Year`,
     COUNT(*) AS total_cars
@@ -60,28 +52,35 @@ GROUP BY `Model Year`
 ORDER BY `Model Year`;
 
 
--- =====================================================
--- 4. ADVANCED ANALYSIS
--- =====================================================
+-- cte growth analysis
 
--- Yearly Growth Percentage 
+WITH yearly_data AS (
+    SELECT 
+        `Model Year`,
+        COUNT(*) AS total_cars
+    FROM ev_clean
+    GROUP BY `Model Year`
+),
+growth AS (
+    SELECT 
+        `Model Year`,
+        total_cars,
+        LAG(total_cars) OVER (ORDER BY `Model Year`) AS prev_year
+    FROM yearly_data
+)
 SELECT 
     `Model Year`,
-    COUNT(*) AS total_cars,
-
-    LAG(COUNT(*)) OVER (ORDER BY `Model Year`) AS prev_year,
-
+    total_cars,
+    prev_year,
     ROUND(
-        (COUNT(*) - LAG(COUNT(*)) OVER (ORDER BY `Model Year`)) * 100.0
-        / LAG(COUNT(*)) OVER (ORDER BY `Model Year`),
+        (total_cars - prev_year) * 100.0 / prev_year,
         2
     ) AS growth_percentage
-
-FROM ev_clean
-GROUP BY `Model Year`;
+FROM growth;
 
 
--- Market Share by Manufacturer
+-- market share
+
 SELECT 
     make,
     COUNT(*) AS total_cars,
@@ -96,7 +95,76 @@ GROUP BY make
 ORDER BY market_share_percentage DESC;
 
 
--- Top Manufacturer per Year
+-- top cities
+
+WITH city_stats AS (
+    SELECT 
+        city,
+        COUNT(*) AS total_ev
+    FROM ev_clean
+    GROUP BY city
+)
+SELECT *
+FROM city_stats
+ORDER BY total_ev DESC
+LIMIT 10;
+
+
+-- segmentation
+
+SELECT 
+    make,
+    COUNT(*) AS total_cars,
+
+    CASE 
+        WHEN COUNT(*) > 10000 THEN 'high'
+        WHEN COUNT(*) BETWEEN 5000 AND 10000 THEN 'medium'
+        ELSE 'low'
+    END AS market_segment
+
+FROM ev_clean
+GROUP BY make;
+
+
+-- year over year comparison (self join)
+
+SELECT 
+    a.make,
+    a.`Model Year` AS year,
+    COUNT(a.make) AS current_year,
+    COUNT(b.make) AS previous_year,
+
+    ROUND(
+        (COUNT(a.make) - COUNT(b.make)) * 100.0 / NULLIF(COUNT(b.make), 0),
+        2
+    ) AS yoy_growth
+
+FROM ev_clean a
+LEFT JOIN ev_clean b
+    ON a.make = b.make
+    AND a.`Model Year` = b.`Model Year` + 1
+
+GROUP BY 
+    a.make,
+    a.`Model Year`
+ORDER BY 
+    a.make,
+    a.`Model Year`;
+
+
+-- average range
+
+SELECT 
+    make,
+    ROUND(AVG(electric_range), 2) AS avg_range
+FROM ev_clean
+WHERE electric_range IS NOT NULL
+GROUP BY make
+ORDER BY avg_range DESC;
+
+
+-- rank manufacturers per year (ADDED)
+
 SELECT *
 FROM (
     SELECT 
@@ -111,74 +179,4 @@ FROM (
 
     FROM ev_clean
     GROUP BY `Model Year`, make
-) ranked
-WHERE rank_per_year = 1;
-
-
--- =====================================================
--- 5. BUSINESS INSIGHTS QUERIES 
--- =====================================================
-
--- Average Electric Range by Manufacturer
-SELECT 
-    make,
-    ROUND(AVG(electric_range), 2) AS avg_range
-FROM ev_clean
-WHERE electric_range IS NOT NULL
-GROUP BY make
-ORDER BY avg_range DESC;
-
-
--- Top Cities by EV Adoption
-SELECT 
-    city,
-    COUNT(*) AS total_ev
-FROM ev_clean
-GROUP BY city
-ORDER BY total_ev DESC
-LIMIT 10;
-
-
--- EV Type Distribution by City
-SELECT 
-    city,
-    ev_type,
-    COUNT(*) AS total
-FROM ev_clean
-GROUP BY city, ev_type
-ORDER BY city;
-
-
--- CAFV Eligibility Distribution
-SELECT 
-    cafv_eligibility,
-    COUNT(*) AS total
-FROM ev_clean
-GROUP BY cafv_eligibility
-ORDER BY total DESC;
-
-
--- =====================================================
--- 6. Market Share Per Year
--- =====================================================
-
-SELECT 
-    `Model Year`,
-    make,
-
-    COUNT(*) AS total_cars,
-
-    ROUND(
-        COUNT(*) * 100.0 
-        / SUM(COUNT(*)) OVER (PARTITION BY `Model Year`),
-        2
-    ) AS market_share_percentage,
-
-    RANK() OVER (
-        PARTITION BY `Model Year`
-        ORDER BY COUNT(*) DESC
-    ) AS rank_per_year
-
-FROM ev_clean
-GROUP BY `Model Year`, make
-ORDER BY `Model Year`, rank_per_year;
+) ranked;
